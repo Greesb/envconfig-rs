@@ -14,7 +14,7 @@
 
 ```rust
 [dependencies]
-envconfig = "0.10.0"
+envconfig = "0.10.1"
 ```
 
 ## Usage

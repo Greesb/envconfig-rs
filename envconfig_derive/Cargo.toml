@@ -1,6 +1,6 @@
 [package]
 name = "envconfig_derive"
-version = "0.10.0"
+version = "0.10.1"
 authors = ["Sergey Potapov <blake131313@gmail.com>"]
 description = "Build a config structure from environment variables without boilerplate."
 categories = ["config", "web-programming"]
@@ -16,6 +16,6 @@ edition = "2018"
 proc-macro = true
 
 [dependencies]
-syn = "1.0.17"
-quote = "1.0.3"
-proc-macro2 = "1.0.9"
+syn = "1.0.109"
+quote = "1.0.27"
+proc-macro2 = "1.0.58"
