@@ -5,7 +5,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
-use syn::{Attribute, DeriveInput, Field, Fields, Ident, Lit, Meta, NestedMeta};
+use syn::{parenthesized, Attribute, DeriveInput, Field, Fields, Ident, Lit, LitStr, Meta};
 
 #[proc_macro_derive(Envconfig, attributes(envconfig))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -24,13 +24,8 @@ fn impl_envconfig(input: &DeriveInput) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
 
     let input_attr = fetch_envconfig_attr_from_attrs(&input.attrs);
-    let input_list = match input_attr {
-        Some(attr) => Some(fetch_list_from_attr(&Some(input.ident.clone()), attr)),
-        None => None,
-    };
-
-    let env_prefix = match input_list {
-        Some(l) => find_item_in_list(&Some(input.ident.clone()), &l, "env_prefix").cloned(),
+    let env_prefix = match input_attr {
+        Some(attr) => find_item_in_attr_meta(&input.ident as &Option<proc_macro2::Ident>, &attr, "env_prefix"),
         None => None,
     };
 
@@ -48,7 +43,7 @@ fn impl_envconfig(input: &DeriveInput) -> proc_macro2::TokenStream {
 fn impl_envconfig_for_struct(
     struct_name: &Ident,
     fields: &Punctuated<Field, Comma>,
-    env_prefix: Option<Lit>,
+    env_prefix: Option<LitStr>,
 ) -> proc_macro2::TokenStream {
     let field_assigns_env = fields
         .iter()
@@ -80,10 +75,10 @@ fn impl_envconfig_for_struct(
     }
 }
 
-fn gen_field_assign(field: &Field, source: Source, env_prefix: &Option<Lit>) -> proc_macro2::TokenStream {
+fn gen_field_assign(field: &Field, source: Source, env_prefix: &Option<LitStr>) -> proc_macro2::TokenStream {
     let attr = fetch_envconfig_attr_from_attrs(&field.attrs);
     let env_prefix_str = match env_prefix {
-        Some(prefix) => get_lit_str_value(prefix, &field.ident),
+        Some(prefix) => prefix.value(),
         None => "".to_string(),
     };
 
@@ -92,16 +87,17 @@ fn gen_field_assign(field: &Field, source: Source, env_prefix: &Option<Lit>) -> 
         let list = fetch_list_from_attr(&field.ident, attr);
 
         // If nested attribute is present
-        let nested_value_opt = find_item_in_list(&field.ident, &list, "nested");
+        let nested_value_opt = find_item_in_attr_meta(&field.ident, &attr, "nested");
         if nested_value_opt.is_some() {
             return gen_field_assign_for_struct_type(field, source);
         }
 
-        let opt_default = find_item_in_list(&field.ident, &list, "default");
+        let opt_default = find_item_in_attr_meta(&field.ident, &attr, "default");
 
-        let from_opt = find_item_in_list(&field.ident, &list, "from");
+        let from_opt = find_item_in_attr_meta(&field.ident, &attr, "from");
         let env_var_name: String = match from_opt {
-            Some(v) => format!("{}{}", env_prefix_str, get_lit_str_value(v, &field.ident)),
+            Some(v) => format!("{}{}", env_prefix_str, v.value()),
+            //get_lit_str_value(v, &field.ident)),
             None => field_to_env_var(field, env_prefix_str),
         };
         let env_var = quote! { #env_var_name };
@@ -213,52 +209,50 @@ fn gen_field_assign_for_non_optional_type(
 
 fn fetch_envconfig_attr_from_attrs(attrs: &Vec<Attribute>) -> Option<&Attribute> {
     attrs.iter().find(|a| {
-        let path = &a.path;
+        let path = &a.path();
         let name = quote!(#path).to_string();
         name == "envconfig"
     })
 }
 
-fn fetch_list_from_attr(attr_owner_ident: &Option<Ident> , attr: &Attribute) -> Punctuated<NestedMeta, Comma> {
-    let opt_meta = attr.parse_meta().unwrap_or_else(|err| {
-        panic!(
-            "Can not interpret meta of `envconfig` attribute on `{}`: {}",
-            to_s(attr_owner_ident),
-            err
-        )
+fn find_item_in_attr_meta<'n>(attr_owner_ident: &Option<Ident> , attr: &Attribute, item_name: &'n str) -> Option<LitStr> {
+    let mut item: Option<LitStr> = None;
+    attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident(item_name) {
+            let content;
+            parenthesized!(content in meta.input);
+            item = Some(content.parse()?);
+            return Ok(());
+        }
+
+        Ok(())
     });
 
-    match opt_meta {
-        Meta::List(l) => l.nested,
-        _ => panic!(
-            "`envconfig` attribute on `{}` must contain a list",
-            to_s(attr_owner_ident)
-        ),
-    }
+    item
 }
 
-fn find_item_in_list<'i, 'l, 'n>(
-    list_owner_ident: &'i Option<Ident>,
-    list: &'l Punctuated<NestedMeta, Comma>,
-    item_name: &'n str,
-) -> Option<&'l Lit> {
-    list.iter()
-        .map(|item| match item {
-            NestedMeta::Meta(meta) => match meta {
-                Meta::NameValue(name_value) => name_value,
-                _ => panic!(
-                    "`envconfig` attribute on `{}` must contain name/value item",
-                    to_s(&list_owner_ident),
-                ),
-            },
-            _ => panic!(
-                "Failed to process `envconfig` attribute on `{}`",
-                to_s(&list_owner_ident),
-            ),
-        })
-        .find(|name_value| name_value.path.is_ident(item_name))
-        .map(|item| &item.lit)
-}
+//fn find_item_in_list<'i, 'l, 'n>(
+//    list_owner_ident: &'i Option<Ident>,
+//    list: &'l Punctuated<NestedMeta, Comma>,
+//    item_name: &'n str,
+//) -> Option<&'l Lit> {
+//    list.iter()
+//        .map(|item| match item {
+//            NestedMeta::Meta(meta) => match meta {
+//                Meta::NameValue(name_value) => name_value,
+//                _ => panic!(
+//                    "`envconfig` attribute on `{}` must contain name/value item",
+//                    to_s(&list_owner_ident),
+//                ),
+//            },
+//            _ => panic!(
+//                "Failed to process `envconfig` attribute on `{}`",
+//                to_s(&list_owner_ident),
+//            ),
+//        })
+//        .find(|name_value| name_value.path.is_ident(item_name))
+//        .map(|item| &item.lit)
+//}
 
 fn to_s<T: quote::ToTokens>(node: &T) -> String {
     quote!(#node).to_string()
